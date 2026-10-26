@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Test GPS a kompasu</title>
+<style>
+/* Layout: one narrow column for a phone used outdoors: dial first, then readings, then the GPS scatter plot, then the test steps */
+:root{
+  --bg:#f1f3ee;
+  --panel:#e4e9e1;
+  --line:#bcc7bb;
+  --fg:#15231c;
+  --muted:#52625a;
+  --accent:#27684a;
+  --on-accent:#ffffff;
+  --arrow:#d4480d;
+  --good:#23703a;
+  --warn:#9a5b00;
+  --bad:#b3261e;
+  --font:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#101814;
+    --panel:#1a2620;
+    --line:#34463c;
+    --fg:#e6eee8;
+    --muted:#9db0a4;
+    --accent:#6ec79a;
+    --on-accent:#0c1510;
+    --arrow:#ff8a4f;
+    --good:#6fd28c;
+    --warn:#f0b24a;
+    --bad:#ff7a70;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 var(--font)}
+main{max-width:480px;margin:0 auto;padding:20px 16px 48px;display:grid;gap:24px}
+h1{margin:0;font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+.lede{margin:6px 0 0;color:var(--muted);font-size:15px;max-width:60ch}
+
+#notes{display:grid;gap:8px}
+#notes:empty{display:none}
+.banner{margin:0;padding:10px 12px;border-radius:8px;border:1.5px solid currentColor;font-size:14px;line-height:1.4}
+.banner.bad{color:var(--bad)}
+.banner.warn{color:var(--warn)}
+
+button{font:inherit;font-weight:600;min-height:48px;padding:0 16px;border-radius:10px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer}
+button.primary{width:100%;background:var(--accent);color:var(--on-accent)}
+button:disabled{opacity:.4;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+
+.dialwrap{text-align:center}
+#dial{display:block;width:min(100%,320px);height:auto;margin:0 auto}
+.ring{fill:none;stroke:var(--line);stroke-width:2}
+.tick{stroke:var(--line);stroke-width:2}
+.front{fill:var(--fg)}
+.nbub{fill:var(--accent)}
+.ntxt{fill:var(--on-accent);font:700 14px var(--font);text-anchor:middle}
+#arrow path{fill:var(--arrow)}
+#arrow.off path{fill:var(--line)}
+#arrow.weak path{opacity:.35}
+.hub{fill:var(--bg);stroke:var(--fg);stroke-width:2}
+.dist{margin:8px 0 0;font:700 44px/1.1 var(--mono);font-variant-numeric:tabular-nums}
+.hint{margin:6px auto 0;color:var(--muted);font-size:14px;max-width:36ch}
+.legend{margin:2px 0 0;color:var(--muted);font-size:12px}
+
+.group{display:grid;gap:10px}
+.group h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.cells{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cell{background:var(--panel);padding:10px 12px;min-width:0}
+.cell dt{font-size:12px;color:var(--muted)}
+.cell dd{margin:2px 0 0;font:600 18px/1.3 var(--mono);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.cell dd.good{color:var(--good)}
+.cell dd.warn{color:var(--warn)}
+.cell dd.bad{color:var(--bad)}
+input{font:inherit;width:100%;min-height:28px;padding:0;border:0;border-bottom:1.5px solid var(--line);border-radius:0;background:transparent;color:var(--fg)}
+
+#scatter{display:block;width:100%;max-width:340px;aspect-ratio:1;margin:0 auto}
+.note{margin:0;color:var(--muted);font-size:14px;max-width:60ch}
+.steps{margin:0;padding-left:1.3em;display:grid;gap:8px;font-size:15px}
+.steps li::marker{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Test GPS a kompasu</h1>
+    <p class="lede">Zjistíte, jak přesně telefon pozná polohu a směr. Označte cíl, odejděte pár desítek metrů a sledujte, kam šipka míří.</p>
+  </header>
+
+  <div id="notes" aria-live="polite"></div>
+
+  <button id="start" class="primary" type="button">Spustit měření</button>
+
+  <section class="dialwrap" aria-label="Šipka k označenému cíli">
+    <svg id="dial" viewBox="-120 -120 240 240" role="img" aria-label="Šipka ukazující k označenému cíli">
+      <circle class="ring" r="100"/>
+      <g id="ticks"></g>
+      <path class="front" d="M-8 -118 L8 -118 L0 -106 Z"/>
+      <g id="north" visibility="hidden"><circle class="nbub" cx="0" cy="-100" r="12"/><text class="ntxt" x="0" y="-95.5">S</text></g>
+      <g id="arrow" class="off"><path d="M0 -82 L22 -34 L7 -40 L7 62 L-7 62 L-7 -40 L-22 -34 Z"/></g>
+      <circle class="hub" r="5"/>
+    </svg>
+    <p id="dist" class="dist">—</p>
+    <p id="hint" class="hint">Stiskněte Spustit měření.</p>
+    <p class="legend">Trojúhelník nahoře je přední hrana telefonu. Kroužek S ukazuje sever.</p>
+  </section>
+
+  <div class="actions">
+    <button id="mark" type="button" disabled>Označit cíl zde</button>
+    <button id="unmark" type="button" disabled>Smazat cíl</button>
+  </div>
+
+  <section class="group" aria-labelledby="h-gps">
+    <h2 id="h-gps">GPS</h2>
+    <dl class="cells">
+      <div class="cell"><dt>Přesnost</dt><dd id="acc">—</dd></div>
+      <div class="cell"><dt>Rychlost z GPS</dt><dd id="speed">—</dd></div>
+      <div class="cell"><dt>Poslední údaj</dt><dd id="age">—</dd></div>
+      <div class="cell"><dt>Počet údajů</dt><dd id="count">0</dd></div>
+    </dl>
+  </section>
+
+  <section class="group" aria-labelledby="h-compass">
+    <h2 id="h-compass">Kompas</h2>
+    <dl class="cells">
+      <div class="cell"><dt>Směr telefonu</dt><dd id="head">—</dd></div>
+      <div class="cell"><dt>Azimut k cíli</dt><dd id="azim">—</dd></div>
+      <div class="cell"><dt>Držení telefonu</dt><dd id="mode">—</dd></div>
+      <div class="cell"><dt><label for="decl">Deklinace (°)</label></dt><dd><input id="decl" type="number" inputmode="decimal" step="0.1" min="-30" max="30" value="5.5"></dd></div>
+    </dl>
+  </section>
+
+  <section class="group" aria-labelledby="h-motion">
+    <h2 id="h-motion">Pohyb</h2>
+    <dl class="cells">
+      <div class="cell"><dt>Stav</dt><dd id="mstate">—</dd></div>
+      <div class="cell"><dt>V klidu už</dt><dd id="still">—</dd></div>
+      <div class="cell"><dt>Chvění (m/s²)</dt><dd id="rms">—</dd></div>
+      <div class="cell"><dt>Otáčení</dt><dd id="rot">—</dd></div>
+    </dl>
+  </section>
+
+  <section class="group" aria-labelledby="h-scatter">
+    <h2 id="h-scatter">Rozptyl GPS</h2>
+    <canvas id="scatter" role="img" aria-label="Rozptyl posledních měření GPS kolem jejich středu"></canvas>
+    <p id="spread" class="note">Zatím málo údajů.</p>
+    <p class="note">Kroužky mají 5, 10 a 20 m. Když stojíte na místě, vidíte šum, který se při hře smíchá s pohybem soupeře.</p>
+    <button id="clear" type="button">Vymazat body</button>
+  </section>
+
+  <section class="group" aria-labelledby="h-steps">
+    <h2 id="h-steps">Jak testovat</h2>
+    <ol class="steps">
+      <li>Spusťte měření a počkejte, až přesnost GPS klesne pod ±10 m. Venku na volném prostranství to trvá desítky vteřin.</li>
+      <li>Stoupněte si na místo, které bude cílem, a stiskněte Označit cíl zde.</li>
+      <li>Odejděte 20, 50 a 100 m a různě se otáčejte. Šipka má mířit zpátky na označené místo.</li>
+      <li>Telefon držte vodorovně před sebou. Když směr ujíždí, opište s ním ve vzduchu osmičku.</li>
+      <li>Stůjte 30 vteřin na místě a podívejte se na rozptyl GPS. Podle něj poznáte, jak malý poloměr chycení má ještě smysl.</li>
+    </ol>
+  </section>
+</main>
+
+<script>
+(() => {
+'use strict';
+
+// <pure>
+const RAD = Math.PI / 180, DEG = 180 / Math.PI;
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371008.8;
+  const dLat = (lat2 - lat1) * RAD, dLon = (lon2 - lon1) * RAD;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * RAD) * Math.cos(lat2 * RAD) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function bearing(lat1, lon1, lat2, lon2) {
+  const p1 = lat1 * RAD, p2 = lat2 * RAD, dLon = (lon2 - lon1) * RAD;
+  const y = Math.sin(dLon) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dLon);
+  return (Math.atan2(y, x) * DEG + 360) % 360;
+}
+
+// Heading (clockwise from north) of the direction the person is facing.
+// Phone flat: the top edge of the phone. Phone upright: the direction the back of the phone faces.
+function headingFrom(alpha, beta, gamma) {
+  const a = alpha * RAD, b = beta * RAD, g = gamma * RAD;
+  const sa = Math.sin(a), ca = Math.cos(a), sb = Math.sin(b), cb = Math.cos(b), sg = Math.sin(g), cg = Math.cos(g);
+  let east, north, mode;
+  if (Math.abs(cb * cg) > 0.7) {
+    east = -sa * cb; north = ca * cb; mode = 'naplocho';
+  } else {
+    east = -(ca * sg + sa * sb * cg); north = ca * sb * cg - sa * sg; mode = 'svisle';
+  }
+  return { h: (Math.atan2(east, north) * DEG + 360) % 360, mode };
+}
+
+function relAngle(target, heading) {
+  return (((target - heading) % 360) + 360) % 360;
+}
+
+function uncertaintyDeg(err, dist) {
+  return err >= dist ? null : Math.asin(err / dist) * DEG;
+}
+
+function classify(samples, limits) {
+  const n = samples.length;
+  if (n < 10) return null;
+  let mean = 0, rotSum = 0, rotN = 0;
+  for (const s of samples) {
+    mean += s.m;
+    if (s.rot != null) { rotSum += s.rot; rotN++; }
+  }
+  mean /= n;
+  let v = 0;
+  for (const s of samples) v += (s.m - mean) * (s.m - mean);
+  const rms = Math.sqrt(v / n);
+  const rot = rotN ? rotSum / rotN : null;
+  let label = 'stojí';
+  if (rms >= limits.run) label = 'běh';
+  else if (rms >= limits.still || (rot != null && rot >= limits.rot)) label = 'pohyb';
+  return { rms, rot, label };
+}
+// </pure>
+
+const $ = id => document.getElementById(id);
+const LIMITS = { still: 0.4, run: 3.0, rot: 30 };   // m/s² and °/s, guesses to tune after trying
+const FIX_WARN_S = 5, FIX_LOST_S = 15;
+const M_PER_DEG = 111195;
+const SMOOTH = 0.08;
+
+const S = {
+  started: false, pos: null, fixes: [], count: 0, target: null,
+  head: null, hv: null, absolute: null, mode: '', lastOrient: 0,
+  motion: [], lastMotion: 0, still: null, decl: 5.5
+};
+
+const num = (x, d = 0) => x.toLocaleString('cs-CZ', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtDist = m => m < 10 ? num(m, 1) + ' m' : m < 1000 ? num(Math.round(m)) + ' m' : num(m / 1000, 2) + ' km';
+
+const store = {
+  get(k) { try { return localStorage.getItem('gpstest.' + k); } catch (e) { return null; } },
+  set(k, v) { try { if (v == null) localStorage.removeItem('gpstest.' + k); else localStorage.setItem('gpstest.' + k, v); } catch (e) {} }
+};
+
+const notes = {};
+function note(key, text, kind) {
+  if (text) notes[key] = { text, kind: kind || 'warn' }; else delete notes[key];
+  const box = $('notes');
+  box.replaceChildren();
+  for (const k in notes) {
+    const p = document.createElement('p');
+    p.className = 'banner ' + notes[k].kind;
+    p.textContent = notes[k].text;
+    box.appendChild(p);
+  }
+}
+function noteIf(key, cond, text, kind) {
+  if (cond && !notes[key]) note(key, text, kind);
+  else if (!cond && notes[key]) note(key, null);
+}
+
+function setCell(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = cls || '';
+}
+
+let raf = 0;
+function schedule() {
+  if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); });
+}
+
+// ---- GPS ----
+function startGps() {
+  if (!('geolocation' in navigator)) { note('gpsapi', 'Tento prohlížeč nemá přístup k poloze.', 'bad'); return; }
+  navigator.geolocation.watchPosition(onPos, onPosErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+}
+function onPos(p) {
+  const c = p.coords;
+  S.pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, speed: c.speed, t: Date.now() };
+  S.count++;
+  S.fixes.push({ lat: c.latitude, lon: c.longitude });
+  if (S.fixes.length > 60) S.fixes.shift();
+  note('gpserr', null);
+  drawScatter();
+  schedule();
+}
+function onPosErr(e) {
+  const msgs = {
+    1: 'Přístup k poloze je zamítnutý. Povolte polohu pro tuto stránku v nastavení prohlížeče a načtěte ji znovu.',
+    2: 'Poloha není dostupná. Zkontrolujte, že je v telefonu zapnuté GPS.',
+    3: 'GPS neodpovídá. Zkuste to na otevřeném prostranství.'
+  };
+  note('gpserr', msgs[e.code] || 'GPS hlásí chybu.', 'bad');
+}
+
+// ---- Compass ----
+function startOrientation() {
+  const abs = 'ondeviceorientationabsolute' in window;
+  window.addEventListener(abs ? 'deviceorientationabsolute' : 'deviceorientation', e => onOrient(e, abs), true);
+  setTimeout(() => {
+    if (!S.lastOrient) note('compass', 'Kompas neodpovídá. Zkontrolujte, že stránka běží přes HTTPS a že telefon má magnetometr.', 'bad');
+  }, 3000);
+}
+function onOrient(e, abs) {
+  if (typeof e.webkitCompassHeading === 'number') { pushHeading(e.webkitCompassHeading, 'iOS', true); return; }
+  if (e.alpha == null || e.beta == null || e.gamma == null) return;
+  const r = headingFrom(e.alpha, e.beta, e.gamma);
+  pushHeading(r.h, r.mode, abs || e.absolute === true);
+}
+function pushHeading(h, mode, absolute) {
+  S.lastOrient = Date.now();
+  S.mode = mode;
+  S.absolute = absolute;
+  if (notes.compass) note('compass', null);
+  const a = h * RAD;
+  if (!S.hv) S.hv = { x: Math.cos(a), y: Math.sin(a) };
+  else { S.hv.x += SMOOTH * (Math.cos(a) - S.hv.x); S.hv.y += SMOOTH * (Math.sin(a) - S.hv.y); }
+  S.head = (Math.atan2(S.hv.y, S.hv.x) * DEG + 360) % 360;
+  schedule();
+}
+function trueHeading() {
+  return S.head == null ? null : (S.head + (S.absolute ? S.decl : 0) + 360) % 360;
+}
+
+// ---- Motion ----
+function startMotion() {
+  window.addEventListener('devicemotion', e => {
+    const g = e.accelerationIncludingGravity;
+    if (!g || g.x == null) return;
+    const r = e.rotationRate;
+    S.motion.push({
+      t: performance.now(),
+      m: Math.hypot(g.x, g.y, g.z),
+      rot: r && r.alpha != null ? Math.hypot(r.alpha, r.beta, r.gamma) : null
+    });
+    S.lastMotion = Date.now();
+  }, true);
+  setTimeout(() => {
+    if (!S.lastMotion) note('motion', 'Senzor pohybu neodpovídá, pohyb nepůjde rozpoznat.', 'warn');
+  }, 3000);
+}
+
+async function lockScreen() {
+  try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.started) lockScreen();
+});
+
+// ---- Rendering ----
+function render() {
+  const p = S.pos;
+  $('mark').disabled = !p;
+  $('unmark').disabled = !S.target;
+
+  if (p) {
+    setCell('acc', '±' + num(Math.round(p.acc)) + ' m', p.acc <= 10 ? 'good' : p.acc <= 20 ? 'warn' : 'bad');
+    setCell('speed', p.speed == null || isNaN(p.speed) ? '—' : num(p.speed, 1) + ' m/s');
+  }
+  setCell('count', String(S.count));
+
+  const th = trueHeading();
+  setCell('head', th == null ? '—' : Math.round(th) + '°');
+  setCell('mode', S.mode || '—');
+  noteIf('abs', S.absolute === false, 'Kompas není absolutní. Šipka ukazuje jen směr vůči poloze telefonu při spuštění, ne vůči severu.', 'warn');
+
+  const north = $('north');
+  if (th == null) north.setAttribute('visibility', 'hidden');
+  else { north.setAttribute('visibility', 'visible'); north.setAttribute('transform', 'rotate(' + (-th).toFixed(1) + ')'); }
+
+  const arrow = $('arrow');
+  arrow.setAttribute('class', 'off');
+  setCell('azim', '—');
+  $('dist').textContent = '—';
+  let hint;
+  if (!S.started) hint = 'Stiskněte Spustit měření.';
+  else if (!p) hint = 'Čekám na první polohu z GPS…';
+  else if (!S.target) hint = 'Stoupněte si na místo a stiskněte Označit cíl zde.';
+  else {
+    const d = haversine(p.lat, p.lon, S.target.lat, S.target.lon);
+    const b = bearing(p.lat, p.lon, S.target.lat, S.target.lon);
+    $('dist').textContent = fmtDist(d);
+    setCell('azim', Math.round(b) + '°');
+    const err = Math.hypot(p.acc, S.target.acc || 0);
+    const u = uncertaintyDeg(err, d);
+    if (th == null) hint = 'Čekám na kompas…';
+    else {
+      arrow.setAttribute('transform', 'rotate(' + relAngle(b, th).toFixed(1) + ')');
+      if (u == null) {
+        arrow.setAttribute('class', 'weak');
+        hint = 'Jste v rámci chyby GPS (±' + num(Math.round(err)) + ' m). Směr šipky už neplatí.';
+      } else {
+        arrow.removeAttribute('class');
+        hint = 'Nejistota směru kvůli GPS: ±' + Math.round(u) + '°';
+      }
+    }
+  }
+  $('hint').textContent = hint;
+}
+
+function tick() {
+  const p = S.pos;
+  if (p) {
+    const age = (Date.now() - p.t) / 1000;
+    setCell('age', Math.floor(age) + ' s', age < FIX_WARN_S ? 'good' : age < FIX_LOST_S ? 'warn' : 'bad');
+    noteIf('lost', age >= FIX_LOST_S, 'GPS neposlalo údaj déle než 15 s. V hře by hráč dostal diskvalifikaci.', 'bad');
+  }
+
+  const now = performance.now();
+  while (S.motion.length && now - S.motion[0].t > 1500) S.motion.shift();
+  const m = classify(S.motion, LIMITS);
+  if (m) {
+    if (m.label === 'stojí') { if (S.still == null) S.still = Date.now(); } else S.still = null;
+    setCell('mstate', m.label);
+    setCell('still', S.still == null ? '—' : Math.floor((Date.now() - S.still) / 1000) + ' s');
+    setCell('rms', num(m.rms, 2));
+    setCell('rot', m.rot == null ? '—' : Math.round(m.rot) + ' °/s');
+  }
+  render();
+}
+
+function drawScatter() {
+  const cv = $('scatter'), ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const c = n => css.getPropertyValue(n).trim();
+  const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 18, k = R / 25;
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = c('--line');
+  ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+  ctx.font = '11px ' + c('--mono');
+  ctx.textAlign = 'center';
+  for (const r of [5, 10, 20]) {
+    ctx.beginPath(); ctx.arc(cx, cy, r * k, 0, Math.PI * 2); ctx.strokeStyle = c('--line'); ctx.stroke();
+    ctx.fillStyle = c('--muted'); ctx.fillText(r + ' m', cx, cy - r * k - 3);
+  }
+
+  const f = S.fixes;
+  if (f.length < 3) { $('spread').textContent = 'Zatím málo údajů.'; return; }
+  let la = 0, lo = 0;
+  for (const q of f) { la += q.lat; lo += q.lon; }
+  la /= f.length; lo /= f.length;
+  const cosl = Math.cos(la * RAD);
+  const pts = f.map(q => ({ x: (q.lon - lo) * M_PER_DEG * cosl, y: (q.lat - la) * M_PER_DEG }));
+  let sum = 0, max = 0;
+  pts.forEach((q, i) => {
+    const d = Math.hypot(q.x, q.y);
+    sum += d; if (d > max) max = d;
+    if (d > 25) return;
+    const last = i === pts.length - 1;
+    ctx.globalAlpha = last ? 1 : 0.55;
+    ctx.fillStyle = last ? c('--arrow') : c('--accent');
+    ctx.beginPath(); ctx.arc(cx + q.x * k, cy - q.y * k, last ? 5 : 3, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+  $('spread').textContent = 'Odchylka od středu: průměr ' + num(sum / pts.length, 1) + ' m, nejvíc ' + num(max, 1) + ' m (' + pts.length + ' bodů).';
+}
+
+// ---- Controls ----
+$('start').addEventListener('click', async () => {
+  if (S.started) return;
+  S.started = true;
+  $('start').hidden = true;
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') note('compass', 'Přístup ke kompasu byl zamítnut.', 'bad');
+    }
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      await DeviceMotionEvent.requestPermission();
+    }
+  } catch (e) {}
+  startGps();
+  startOrientation();
+  startMotion();
+  lockScreen();
+  render();
+});
+
+$('mark').addEventListener('click', () => {
+  if (!S.pos) return;
+  S.target = { lat: S.pos.lat, lon: S.pos.lon, acc: S.pos.acc };
+  store.set('target', JSON.stringify(S.target));
+  render();
+});
+$('unmark').addEventListener('click', () => {
+  S.target = null;
+  store.set('target', null);
+  render();
+});
+$('clear').addEventListener('click', () => {
+  S.fixes = [];
+  S.count = 0;
+  drawScatter();
+  render();
+});
+$('decl').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  if (!isNaN(v)) { S.decl = Math.max(-30, Math.min(30, v)); store.set('decl', String(S.decl)); render(); }
+});
+window.addEventListener('resize', drawScatter);
+
+// ---- Init ----
+(function init() {
+  const ticks = $('ticks');
+  for (let a = 0; a < 360; a += 15) {
+    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    const long = a % 90 === 0;
+    l.setAttribute('class', 'tick');
+    l.setAttribute('x1', '0'); l.setAttribute('x2', '0');
+    l.setAttribute('y1', long ? '-84' : '-90'); l.setAttribute('y2', '-95');
+    l.setAttribute('transform', 'rotate(' + a + ')');
+    ticks.appendChild(l);
+  }
+  try { const t = JSON.parse(store.get('target')); if (t && typeof t.lat === 'number' && typeof t.lon === 'number') S.target = t; } catch (e) {}
+  const d = parseFloat(store.get('decl'));
+  if (!isNaN(d)) { S.decl = d; $('decl').value = String(d); }
+  if (!window.isSecureContext) {
+    note('https', 'Stránka neběží přes HTTPS, takže prohlížeč zablokuje GPS i kompas. Nahrajte ji na hosting s HTTPS (GitHub Pages, Firebase Hosting).', 'bad');
+  }
+  drawScatter();
+  render();
+  setInterval(tick, 250);
+})();
+})();
+</script>
+</body>
+</html>
