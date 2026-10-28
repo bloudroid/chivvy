@@ -125,8 +125,6 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 .vis.hidden-ok{color:var(--good)}
 .vis.warn{color:var(--warn)}
 .vis.exposed{color:var(--bad)}
-.bar{height:10px;border-radius:6px;background:var(--panel);border:1px solid var(--line);overflow:hidden}
-.bar>div{height:100%;width:0;background:var(--warn)}
 
 #mini{display:block;width:150px;height:150px;flex:none}
 .mini-ring{fill:none;stroke:var(--line);stroke-width:3}
@@ -144,7 +142,6 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
     <div class="sens" id="sens">
       <span class="pill" id="p-gps">GPS čeká</span>
       <span class="pill" id="p-cmp">Kompas čeká</span>
-      <span class="pill" id="p-mot">Pohyb čeká</span>
     </div>
   </header>
 
@@ -211,9 +208,6 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
         <label class="fld" for="catchr">Poloměr chycení (m)
           <input id="catchr" type="number" inputmode="numeric" min="5" max="50" step="1" value="10">
         </label>
-        <label class="fld" for="stillsec">Po kolika sekundách stání se chytaný ukáže (s)
-          <input id="stillsec" type="number" inputmode="numeric" min="2" max="30" step="1" value="5">
-        </label>
         <label class="chk" for="showdist"><input id="showdist" type="checkbox"> Chytač vidí u šipky i vzdálenost</label>
       </div>
     </details>
@@ -266,7 +260,6 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 
     <div id="g-hider" class="stack" hidden>
       <div id="g-vis" class="vis"></div>
-      <div class="bar" aria-hidden="true"><div id="g-bar"></div></div>
       <p id="g-vis-hint" class="note center"></p>
     </div>
 
@@ -2639,21 +2632,6 @@ function headingFrom(alpha, beta, gamma) {
 }
 function relAngle(target, heading) { return (((target - heading) % 360) + 360) % 360; }
 function uncertaintyDeg(err, dist) { return err >= dist ? null : Math.asin(err / dist) * DEG; }
-function classify(samples, limits) {
-  const n = samples.length;
-  if (n < 10) return null;
-  let mean = 0, rotSum = 0, rotN = 0;
-  for (const s of samples) { mean += s.m; if (s.rot != null) { rotSum += s.rot; rotN++; } }
-  mean /= n;
-  let v = 0;
-  for (const s of samples) v += (s.m - mean) * (s.m - mean);
-  const rms = Math.sqrt(v / n);
-  const rot = rotN ? rotSum / rotN : null;
-  let label = 'stojí';
-  if (rms >= limits.run) label = 'běh';
-  else if (rms >= limits.still || (rot != null && rot >= limits.rot)) label = 'pohyb';
-  return { rms, rot, label };
-}
 
 // Nastavení podle poloměru: náskok a čas hledání.
 function derive(R) {
@@ -2719,7 +2697,7 @@ function dqList(players, pos, now, startAt, limit) {
   }
   return out;
 }
-function isVisible(p, now, fresh) { return !!p && p.still === true && now - (p.ts || 0) <= fresh; }
+function isVisible(p, now, fresh) { return !!p && now - (p.ts || 0) <= fresh; }
 function findCatches(me, hiders, r, now, fresh) {
   const out = [];
   for (const h of hiders) {
@@ -2748,8 +2726,8 @@ const CFG = {
   JOIN_RADIUS: 30, WARN_FROM: 20, KICK_MS: 8000,
   HEARTBEAT_MS: 3000, GPS_FRESH_MS: 8000, FRESH_MS: 9000, DQ_MS: 20000,
   OUT_GRACE_MS: 15000, EDGE_WARN_M: 30, COUNTDOWN_MS: 5000,
-  GPS_OK_ACC: 30, MAX_PLAYERS: 10, SPEED_MOVING: 1.0, CATCH_HOLD_MS: 2000,
-  LIMITS: { still: 0.4, run: 3.0, rot: 30 }   // m/s² a °/s, ladit podle testu
+  GPS_OK_ACC: 30, MAX_PLAYERS: 10, CATCH_HOLD_MS: 2000,
+  SEEKER_WAIT_M: 20, SEEKER_WARN_M: 15, WAIT_GRACE_MS: 10000, HUNT_HEARTBEAT_MS: 1000
 };
 const COLORS = ['#e6194b', '#f58231', '#d4a000', '#3cb44b', '#17a2a2', '#4363d8', '#911eb4', '#f032e6', '#8c564b', '#7a8691'];
 const COLOR_NAMES = ['červená', 'oranžová', 'žlutá', 'zelená', 'tyrkysová', 'modrá', 'fialová', 'růžová', 'hnědá', 'šedá'];
@@ -2783,13 +2761,12 @@ let db = null, SV = null;
 const G = {
   uid: null, code: null, meta: null, players: {}, pos: {}, offset: 0, online: false,
   screen: null, unsub: [], lastStatus: null, joinedOnce: false, closeSince: {},
-  outsideSince: null, kickSince: null, lastPublish: 0, lastPublishStill: null,
+  outsideSince: null, kickSince: null, waitOutSince: null, lastPublish: 0,
   sig: {}, qrFor: null, anchorDist: null, createTouched: { head: false, dur: false },
   cfg: { mode: 'time', roleMode: 'random' }, busy: false
 };
 const S = {
   pos: null, head: null, hv: null, absolute: null, mode: '', lastOrient: 0, rotNow: null,
-  motion: [], lastMotion: 0, mlabel: null, stillSince: null, stillFixes: [], stillFor: 0,
   decl: 5.5, oriFn: null, oriType: '', motFn: null, tries: 0
 };
 const serverNow = () => Date.now() + G.offset;
@@ -2826,7 +2803,7 @@ const SCREENS = ['setup', 'home', 'create', 'lobby', 'game', 'end'];
 function show(name) {
   for (const s of SCREENS) $('s-' + s).hidden = s !== name;
   G.screen = name;
-  for (const k of ['join', 'create', 'start', 'kick', 'edge', 'gpsloss']) note(k, null);
+  for (const k of ['join', 'create', 'start', 'kick', 'edge', 'gpsloss', 'wait']) note(k, null);
   window.scrollTo(0, 0);
   schedule();
 }
@@ -2842,7 +2819,6 @@ function onPos(p) {
   const c = p.coords;
   S.pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, speed: c.speed, t: Date.now() };
   note('gpserr', null);
-  if (S.stillSince) { S.stillFixes.push({ lat: c.latitude, lon: c.longitude }); if (S.stillFixes.length > 40) S.stillFixes.shift(); }
   schedule();
 }
 function onPosErr(e) {
@@ -2863,12 +2839,8 @@ function attachOrientation() {
 function attachMotion() {
   if (S.motFn) window.removeEventListener('devicemotion', S.motFn, true);
   S.motFn = e => {
-    const g = e.accelerationIncludingGravity;
-    const r = e.rotationRate;
+    const r = e.rotationRate;   // jen pro adaptivní vyhlazení kompasu
     S.rotNow = r && r.alpha != null ? Math.hypot(r.alpha, r.beta, r.gamma) : null;
-    if (!g || g.x == null) return;
-    S.motion.push({ t: performance.now(), m: Math.hypot(g.x, g.y, g.z), rot: S.rotNow });
-    S.lastMotion = Date.now();
   };
   window.addEventListener('devicemotion', S.motFn, true);
 }
@@ -2900,15 +2872,11 @@ function startSensors() {
   attachMotion();
   // Kontrola každé 3 s: když události nedorazily, připojíme je znovu.
   const wd = setInterval(() => {
-    const ok = S.lastOrient && S.lastMotion;
-    if (ok) { clearInterval(wd); return; }
+    if (S.lastOrient) { clearInterval(wd); return; }
     S.tries++;
-    if (!S.lastOrient) attachOrientation();
-    if (!S.lastMotion) attachMotion();
-    if (S.tries >= 2) {
-      if (!S.lastOrient) note('compass', 'Kompas neodpovídá. Načtěte stránku znovu a zkontrolujte, že běží v Chromu přes HTTPS.', 'bad');
-      if (!S.lastMotion) note('motion', 'Senzor pohybu neodpovídá. Poznáme jen pohyb podle GPS.', 'warn');
-    }
+    attachOrientation();
+    attachMotion();
+    if (S.tries >= 2) note('compass', 'Kompas neodpovídá. Načtěte stránku znovu a zkontrolujte, že běží v Chromu přes HTTPS.', 'bad');
   }, 3000);
 }
 async function askMotionPermission() {
@@ -2944,7 +2912,7 @@ function resetGame() {
   G.unsub = [];
   G.code = null; G.meta = null; G.players = {}; G.pos = {};
   G.lastStatus = null; G.joinedOnce = false; G.closeSince = {};
-  G.outsideSince = null; G.kickSince = null; G.qrFor = null; G.sig = {};
+  G.outsideSince = null; G.kickSince = null; G.waitOutSince = null; G.qrFor = null; G.sig = {};
   store.set('lastGame', null);
 }
 function enterGame(code) {
@@ -3019,15 +2987,14 @@ const newPlayer = (name, color) => ({ name, color, role: null, status: 'ok', joi
 function readSettings() {
   const v = id => parseFloat($(id).value);
   const inRange = (x, lo, hi) => !isNaN(x) && x >= lo && x <= hi;
-  const radius = v('radius'), head = v('headstart'), dur = v('duration'), cr = v('catchr'), ss = v('stillsec');
+  const radius = v('radius'), head = v('headstart'), dur = v('duration'), cr = v('catchr');
   if (!inRange(head, 1, 30)) return 'Náskok musí být 1 až 30 minut.';
   if (G.cfg.mode === 'time' && !inRange(dur, 5, 180)) return 'Čas hledání musí být 5 až 180 minut.';
   if (!inRange(cr, 5, 50)) return 'Poloměr chycení musí být 5 až 50 m.';
-  if (!inRange(ss, 2, 30)) return 'Doba stání musí být 2 až 30 sekund.';
   return {
     radius, mode: G.cfg.mode, roleMode: G.cfg.roleMode,
     headStartMin: Math.round(head), durationMin: Math.round(dur || 0),
-    catchR: cr, stillSec: ss, showDist: $('showdist').checked
+    catchR: cr, showDist: $('showdist').checked
   };
 }
 async function createGame() {
@@ -3115,7 +3082,6 @@ async function startGame() {
 function pubPos() {
   const p = S.pos;
   if (!p) return null;
-  if (S.stillFixes.length >= 3) { const m = meanPos(S.stillFixes); return { lat: m.lat, lon: m.lon, acc: p.acc }; }
   return { lat: p.lat, lon: p.lon, acc: p.acc };
 }
 function publish(force) {
@@ -3124,14 +3090,11 @@ function publish(force) {
   if (!me || me.status !== 'ok') return;
   const p = S.pos, now = Date.now();
   if (!p || now - p.t > CFG.GPS_FRESH_MS) return;   // bez GPS se nevysílá, tím vyprší heartbeat
-  const stillSec = (G.meta.settings && G.meta.settings.stillSec) || 5;
-  const phase = phaseOf(G.meta, serverNow());
-  const still = me.role === 'hider' && phase === 'hunt' && S.stillFor >= stillSec;
-  if (!force && now - G.lastPublish < CFG.HEARTBEAT_MS && still === G.lastPublishStill) return;
+  const hunted = me.role === 'hider' && phaseOf(G.meta, serverNow()) === 'hunt';
+  if (!force && now - G.lastPublish < (hunted ? CFG.HUNT_HEARTBEAT_MS : CFG.HEARTBEAT_MS)) return;
   G.lastPublish = now;
-  G.lastPublishStill = still;
   const q = pubPos();
-  R('pos/' + G.uid).set({ lat: q.lat, lon: q.lon, acc: Math.round(q.acc), ts: SV.TIMESTAMP, still }).catch(() => {});
+  R('pos/' + G.uid).set({ lat: q.lat, lon: q.lon, acc: Math.round(q.acc), ts: SV.TIMESTAMP }).catch(() => {});
 }
 function lobbyLogic(now) {
   const a = G.meta.anchor, p = S.pos;
@@ -3165,6 +3128,22 @@ function perimeterLogic(now) {
     else note('edge', null);
   }
 }
+function seekerWaitLogic(now) {
+  const c = G.meta.center, p = S.pos;
+  if (!c || !p) return;
+  const d = haversine(c.lat, c.lon, p.lat, p.lon);
+  if (d > CFG.SEEKER_WAIT_M) {
+    if (!G.waitOutSince) G.waitOutSince = now;
+    const left = Math.max(0, Math.ceil((CFG.WAIT_GRACE_MS - (now - G.waitOutSince)) / 1000));
+    note('wait', 'Chytač musí do konce náskoku zůstat do ' + CFG.SEEKER_WAIT_M + ' m od startu. Jste ' + Math.round(d) + ' m daleko, vraťte se za ' + left + ' s.', 'bad');
+    vib([150]);
+    if (left <= 0) setStatusIfOk(G.uid, 'out', { reason: 'early' });
+  } else {
+    G.waitOutSince = null;
+    if (d > CFG.SEEKER_WARN_M) note('wait', 'Blížíte se k limitu ' + CFG.SEEKER_WAIT_M + ' m od startu (' + Math.round(d) + ' m).', 'warn');
+    else note('wait', null);
+  }
+}
 function catchLogic(now, sn) {
   const mine = pubPos();
   if (!mine || now - S.pos.t > CFG.GPS_FRESH_MS) return;
@@ -3193,8 +3172,11 @@ function runningLogic(me, now, sn) {
     if (gpsAge > CFG.GPS_FRESH_MS) note('gpsloss', 'GPS neposílá polohu. Do diskvalifikace zbývá ' + Math.max(0, Math.ceil((CFG.DQ_MS - gpsAge) / 1000)) + ' s.', 'bad');
     else note('gpsloss', null);
     if (me.role === 'hider' && phase !== 'countdown') perimeterLogic(now);
-    if (me.role === 'seeker' && phase === 'hunt') catchLogic(now, sn);
-  } else { note('gpsloss', null); note('edge', null); }
+    if (me.role === 'seeker') {
+      if (phase === 'hunt') { note('wait', null); G.waitOutSince = null; catchLogic(now, sn); }
+      else seekerWaitLogic(now);
+    }
+  } else { note('gpsloss', null); note('edge', null); note('wait', null); }
   const ownFresh = G.online && G.pos[G.uid] && sn - (G.pos[G.uid].ts || 0) < CFG.FRESH_MS;
   if (ownFresh) for (const id of dqList(G.players, G.pos, sn, m.startAt, CFG.DQ_MS)) if (id !== G.uid) setStatusIfOk(id, 'dq', { reason: 'gps' });
   const r = checkEnd(m, G.players, sn);
@@ -3214,17 +3196,6 @@ function gameTick() {
   if (G.meta.status === 'running' || G.meta.status === 'lobby') publish(false);
 }
 function tick() {
-  const now = Date.now();
-  while (S.motion.length && performance.now() - S.motion[0].t > 1500) S.motion.shift();
-  const m = classify(S.motion, CFG.LIMITS);
-  S.mlabel = m ? m.label : null;
-  const sp = (S.pos && typeof S.pos.speed === 'number' && !isNaN(S.pos.speed) && now - S.pos.t < 4000) ? S.pos.speed : null;
-  let moving;
-  if (!m && sp === null) moving = true;      // nevíme nic, počítáme jako pohyb
-  else moving = (m && m.label !== 'stojí') || (sp !== null && sp >= CFG.SPEED_MOVING);
-  if (moving) { S.stillSince = null; S.stillFixes = []; }
-  else if (!S.stillSince) S.stillSince = now;
-  S.stillFor = S.stillSince ? (now - S.stillSince) / 1000 : 0;
   gameTick();
   render();
 }
@@ -3239,9 +3210,6 @@ function renderPills() {
   if (S.head == null) { cp.textContent = 'Kompas čeká'; cp.className = 'pill'; }
   else if (S.absolute === false) { cp.textContent = 'Kompas relativní'; cp.className = 'pill warn'; }
   else { cp.textContent = 'Kompas ok'; cp.className = 'pill good'; }
-  const mp = $('p-mot');
-  if (!S.mlabel) { mp.textContent = 'Pohyb čeká'; mp.className = 'pill'; }
-  else { mp.textContent = 'Pohyb: ' + S.mlabel; mp.className = 'pill ' + (S.mlabel === 'stojí' ? 'good' : ''); }
 }
 function sortedPlayers() {
   return Object.entries(G.players).map(([id, p]) => Object.assign({ id }, p))
@@ -3358,12 +3326,20 @@ function renderMini(me) {
   if (len > cap) { x *= cap / len; y *= cap / len; }
   dot.setAttribute('cx', x.toFixed(1)); dot.setAttribute('cy', y.toFixed(1));
   dot.setAttribute('fill', e.edge < 0 ? 'var(--bad)' : e.edge < CFG.EDGE_WARN_M ? 'var(--warn)' : 'var(--accent)');
+  const phase = phaseOf(G.meta, serverNow());
+  if (me && me.role === 'seeker' && (phase === 'countdown' || phase === 'headstart')) {
+    lbl.textContent = 'Od startu (limit ' + CFG.SEEKER_WAIT_M + ' m)';
+    num_.textContent = fmtDist(e.d);
+    num_.style.color = e.d > CFG.SEEKER_WAIT_M ? 'var(--bad)' : e.d > CFG.SEEKER_WARN_M ? 'var(--warn)' : '';
+    return;
+  }
   if (e.edge < 0) { lbl.textContent = 'Mimo plochu o'; num_.textContent = fmtDist(-e.edge); num_.style.color = 'var(--bad)'; }
   else { lbl.textContent = 'Do okraje'; num_.textContent = fmtDist(e.edge); num_.style.color = e.edge < CFG.EDGE_WARN_M ? 'var(--warn)' : ''; }
 }
 function outText(me) {
   if (me.status === 'caught') return ['Byli jste chyceni.', 'Hra pro vás skončila. Můžete sledovat, jak to dopadne.'];
   if (me.status === 'dq') return ['Diskvalifikace.', 'Telefon přestal posílat polohu z GPS.'];
+  if (me.reason === 'early') return ['Vyřazeni.', 'Chytač opustil místo startu před koncem náskoku.'];
   if (me.reason === 'perimeter') return ['Vyřazeni.', 'Opustili jste hrací plochu.'];
   if (me.reason === 'quit') return ['Vzdali jste se.', 'Hra pro vás skončila.'];
   return ['Vyřazeni.', ''];
@@ -3416,7 +3392,7 @@ function renderGame() {
         row.vis = u == null ? 'blízko' : 'vidět ±' + Math.round(u) + '°';
         row.dist = st.showDist ? Math.round(d) : null;
         if (th != null) arrows.push({ ang: relAngle(b, th), color: COLORS[p.color] || '#888', letter: (p.name[0] || '?').toUpperCase(), weak: u == null });
-      } else if (!isH && ok) row.vis = 'skrytý';
+      } else if (!isH && ok) row.vis = phase === 'hunt' ? 'bez signálu' : 'skrytý';
     }
     rows.push(row);
   }
@@ -3424,27 +3400,20 @@ function renderGame() {
   if (ok && !isH) {
     drawArrows(arrows);
     let hint;
-    if (phase !== 'hunt') hint = 'Lov začne po skončení náskoku. Zůstaňte na místě.';
+    if (phase !== 'hunt') hint = 'Lov začne po skončení náskoku. Zůstaňte do ' + CFG.SEEKER_WAIT_M + ' m od startu.';
     else if (th == null) hint = 'Čekám na kompas.';
-    else if (!visCount) hint = 'Nikdo není vidět. Chytaní se pohybují nebo se skrývají.';
+    else if (!visCount) hint = 'Nikdo není vidět. Čekám na polohu chytaných.';
     else hint = 'Vidíte ' + visCount + ' z ' + hiderCount + '. Chycení je do ' + st.catchR + ' m.';
     $('g-sk-hint').textContent = hint;
   }
   if (ok && isH) {
-    const vis = $('g-vis'), bar = $('g-bar'), hint = $('g-vis-hint');
-    const f = Math.min(1, S.stillFor / st.stillSec);
+    const vis = $('g-vis'), hint = $('g-vis-hint');
     if (phase === 'countdown' || phase === 'headstart') {
       vis.textContent = 'Utíkej a schovej se'; setClassOnly(vis, 'vis hidden-ok');
-      bar.style.width = '0'; hint.textContent = 'Během náskoku vás chytači nevidí.';
-    } else if (S.stillFor >= st.stillSec) {
-      vis.textContent = 'Chytači tě vidí'; setClassOnly(vis, 'vis exposed');
-      bar.style.width = '100%'; bar.style.background = 'var(--bad)'; hint.textContent = 'Pohni se, ať zmizíš z jejich obrazovky.';
-    } else if (S.stillFor > 0.5) {
-      vis.textContent = 'Za ' + Math.ceil(st.stillSec - S.stillFor) + ' s tě uvidí'; setClassOnly(vis, 'vis warn');
-      bar.style.width = (f * 100).toFixed(0) + '%'; bar.style.background = 'var(--warn)'; hint.textContent = 'Stojíš. Chytači tě uvidí, až budeš stát ' + st.stillSec + ' s.';
+      hint.textContent = 'Během náskoku vás chytači nevidí a musí zůstat u startu.';
     } else {
-      vis.textContent = 'Nejsi vidět'; setClassOnly(vis, 'vis hidden-ok');
-      bar.style.width = '0'; hint.textContent = 'Dokud se hýbeš, chytači tvou polohu nevidí.';
+      vis.textContent = 'Chytači tě vidí'; setClassOnly(vis, 'vis exposed');
+      hint.textContent = 'Chytači vidí tvou polohu vždy, ať stojíš, nebo se hýbeš.';
     }
   }
   if (ok) renderMini(me);
@@ -3456,7 +3425,7 @@ function renderGame() {
       let tx = '', cls = 'tag';
       if (r.status === 'caught') { tx = 'chycen'; cls += ' bad'; }
       else if (r.status === 'dq') { tx = 'diskvalifikován'; cls += ' bad'; }
-      else if (r.status === 'out') { tx = r.reason === 'perimeter' ? 'mimo plochu' : r.reason === 'quit' ? 'vzdal se' : 'vyřazen'; cls += ' bad'; }
+      else if (r.status === 'out') { tx = r.reason === 'perimeter' ? 'mimo plochu' : r.reason === 'quit' ? 'vzdal se' : r.reason === 'early' ? 'opustil start' : 'vyřazen'; cls += ' bad'; }
       else if (r.vis) { tx = r.vis + (r.dist != null ? ' · ' + r.dist + ' m' : ''); cls += r.vis === 'skrytý' ? '' : ' warn'; }
       else tx = roleName(r.role);
       return h('li', { class: 'pl' }, colorDot(r.color), h('span', { class: 'nm' }, r.name + (r.me ? ' (vy)' : '')),
@@ -3481,7 +3450,7 @@ function renderEnd() {
   const byName = id => (G.players[id] && G.players[id].name) || 'někdo';
   $('en-list').replaceChildren(...list.map(p => {
     let tx = '', cls = 'tag';
-    if (p.role === 'seeker') tx = p.status === 'ok' ? 'chytač' : 'chytač, vyřazen';
+    if (p.role === 'seeker') tx = p.status === 'ok' ? 'chytač' : p.reason === 'early' ? 'chytač, opustil start' : 'chytač, vyřazen';
     else if (p.status === 'ok') { tx = 'přežil'; cls += ' good'; }
     else if (p.status === 'caught') {
       const t = p.at && m.huntAt ? ' po ' + fmtClock(Math.max(0, p.at - m.huntAt)) : '';
