@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#101814">
-<title>Hon</title>
+<title>Chivvy</title>
 <style>
 /* Layout: one narrow column for a phone used outdoors. Top bar with sensor pills, then one screen at a time. */
 :root{
@@ -29,7 +29,7 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 var(--font)}
 [hidden]{display:none!important}
 main{max-width:480px;margin:0 auto;padding:16px 16px 48px;display:grid;gap:20px}
-h1{margin:0;font-size:22px;line-height:1.2;font-weight:700;letter-spacing:-.01em}
+h1{margin:0;font-size:26px;line-height:1.2;font-weight:700;letter-spacing:-.01em;color:var(--accent)}
 h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 .top{display:grid;gap:8px}
 .sens{display:flex;flex-wrap:wrap;gap:6px}
@@ -124,7 +124,7 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 <body>
 <main>
   <header class="top">
-    <h1>Hon</h1>
+    <h1>Chivvy</h1>
     <div class="sens" id="sens">
       <span class="pill" id="p-gps">GPS čeká</span>
       <span class="pill" id="p-cmp">Kompas čeká</span>
@@ -183,12 +183,24 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
         <button id="roles-manual" type="button" aria-pressed="false">Každý si zvolí</button>
       </div>
     </div>
-    <label class="fld" for="headstart">Náskok chytaných (min)
-      <input id="headstart" type="number" inputmode="numeric" min="1" max="30" step="1">
-    </label>
-    <label class="fld" for="duration" id="dur-wrap">Čas hledání po náskoku (min)
-      <input id="duration" type="number" inputmode="numeric" min="5" max="180" step="5">
-    </label>
+    <div class="fld">
+      <div>Náskok chytaných: <output id="head-out"></output></div>
+      <input id="headstart" type="range" min="1" max="10" step="1" value="1" aria-label="Náskok chytaných v minutách">
+      <div class="chips">
+        <button class="small" type="button" data-head="1">1 min</button>
+        <button class="small" type="button" data-head="3">3 min</button>
+        <button class="small" type="button" data-head="5">5 min</button>
+      </div>
+    </div>
+    <div class="fld" id="dur-wrap">
+      <div>Čas hledání po náskoku: <output id="dur-out"></output></div>
+      <input id="duration" type="range" min="5" max="40" step="5" value="10" aria-label="Čas hledání v minutách">
+      <div class="chips">
+        <button class="small" type="button" data-dur="10">10 min</button>
+        <button class="small" type="button" data-dur="20">20 min</button>
+        <button class="small" type="button" data-dur="30">30 min</button>
+      </div>
+    </div>
     <details>
       <summary>Pokročilé</summary>
       <div class="stack">
@@ -2639,13 +2651,6 @@ function classify(samples, limits) {
   return { rms, rot, label };
 }
 
-// Nastavení podle poloměru: náskok a čas hledání.
-function derive(R) {
-  return {
-    headStartMin: Math.max(1, Math.round(1 + R / 250)),
-    durationMin: Math.max(5, Math.round((10 + R * 0.035) / 5) * 5)
-  };
-}
 function shuffle(arr, rnd) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
@@ -2769,7 +2774,7 @@ const G = {
   uid: null, code: null, meta: null, players: {}, pos: {}, offset: 0, online: false,
   screen: null, unsub: [], lastStatus: null, joinedOnce: false, closeSince: {},
   outsideSince: null, kickSince: null, waitOutSince: null, lastPublish: 0,
-  sig: {}, qrFor: null, anchorDist: null, createTouched: { head: false, dur: false },
+  sig: {}, qrFor: null, anchorDist: null,
   cfg: { mode: 'time', roleMode: 'random' }, busy: false
 };
 const S = {
@@ -3005,8 +3010,8 @@ function readSettings() {
   const v = id => parseFloat($(id).value);
   const inRange = (x, lo, hi) => !isNaN(x) && x >= lo && x <= hi;
   const radius = v('radius'), head = v('headstart'), dur = v('duration'), cr = v('catchr'), ss = v('stillsec');
-  if (!inRange(head, 1, 30)) return 'Náskok musí být 1 až 30 minut.';
-  if (G.cfg.mode === 'time' && !inRange(dur, 5, 180)) return 'Čas hledání musí být 5 až 180 minut.';
+  if (!inRange(head, 1, 10)) return 'Náskok musí být 1 až 10 minut.';
+  if (G.cfg.mode === 'time' && !inRange(dur, 5, 40)) return 'Čas hledání musí být 5 až 40 minut.';
   if (!inRange(cr, 5, 50)) return 'Poloměr chycení musí být 5 až 50 m.';
   if (!inRange(ss, 2, 30)) return 'Doba stání musí být 2 až 30 sekund.';
   return {
@@ -3262,6 +3267,8 @@ function renderHome() {
 }
 function renderCreate() {
   $('rad-out').textContent = fmtDist(parseFloat($('radius').value));
+  $('head-out').textContent = $('headstart').value + ' min';
+  $('dur-out').textContent = $('duration').value + ' min';
   $('dur-wrap').hidden = G.cfg.mode !== 'time';
   const p = S.pos;
   const btn = $('btn-create');
@@ -3525,11 +3532,6 @@ function setSeg(a, b, first) {
   $(a).setAttribute('aria-pressed', String(first));
   $(b).setAttribute('aria-pressed', String(!first));
 }
-function applyDerived() {
-  const d = derive(parseFloat($('radius').value));
-  if (!G.createTouched.head) $('headstart').value = d.headStartMin;
-  if (!G.createTouched.dur) $('duration').value = d.durationMin;
-}
 function initUi() {
   const ticks = $('ticks');
   for (let a = 0; a < 360; a += 15) {
@@ -3545,7 +3547,6 @@ function initUi() {
   if (!isNaN(d)) S.decl = d;
   $('name').value = store.get('name') || '';
   $('name').addEventListener('input', () => store.set('name', getName()));
-  applyDerived();
 
   $('btn-new').addEventListener('click', () => { askMotionPermission(); show('create'); });
   $('btn-create-back').addEventListener('click', () => show('home'));
@@ -3553,10 +3554,10 @@ function initUi() {
   $('btn-join-code').addEventListener('click', () => { askMotionPermission(); joinGame($('code-in').value); });
   $('btn-join-link').addEventListener('click', () => { askMotionPermission(); joinGame($('join-code').textContent); });
   $('code-in').addEventListener('input', e => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
-  $('radius').addEventListener('input', () => { applyDerived(); schedule(); });
-  document.querySelectorAll('[data-rad]').forEach(b => b.addEventListener('click', () => { $('radius').value = b.dataset.rad; applyDerived(); schedule(); }));
-  $('headstart').addEventListener('input', () => { G.createTouched.head = true; });
-  $('duration').addEventListener('input', () => { G.createTouched.dur = true; });
+  for (const [id, attr] of [['radius', 'rad'], ['headstart', 'head'], ['duration', 'dur']]) {
+    $(id).addEventListener('input', schedule);
+    document.querySelectorAll('[data-' + attr + ']').forEach(b => b.addEventListener('click', () => { $(id).value = b.dataset[attr]; schedule(); }));
+  }
   $('mode-time').addEventListener('click', () => { G.cfg.mode = 'time'; setSeg('mode-time', 'mode-last', true); schedule(); });
   $('mode-last').addEventListener('click', () => { G.cfg.mode = 'last'; setSeg('mode-time', 'mode-last', false); schedule(); });
   $('roles-random').addEventListener('click', () => { G.cfg.roleMode = 'random'; setSeg('roles-random', 'roles-manual', true); });
