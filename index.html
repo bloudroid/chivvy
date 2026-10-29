@@ -6,6 +6,9 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#101814">
 <title>Chivvy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap">
 <style>
 /* Layout: one narrow column for a phone used outdoors. Top bar with sensor pills, then one screen at a time. */
 :root{
@@ -20,8 +23,8 @@
   --good:#6fd28c;
   --warn:#f0b24a;
   --bad:#ff7a70;
-  --font:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-  --mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace;
+  --font:"Montserrat","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:var(--font);   /* i čísla a kód hry jsou Montserrat, číslice zarovnané přes tabular-nums */
   color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -94,7 +97,7 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 .clock{font-size:46px;line-height:1.1;font-weight:700}
 .muted{color:var(--muted);font-size:14px}
 
-#dial{display:block;width:min(100%,320px);height:auto;margin:0 auto}
+#dial{display:block;width:min(100%,290px);height:auto;margin:0 auto}
 .ring{fill:none;stroke:var(--line);stroke-width:2}
 .tick{stroke:var(--line);stroke-width:2}
 .front{fill:var(--fg)}
@@ -104,6 +107,8 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 .btxt{font:700 14px var(--font);text-anchor:middle}
 .hub{fill:var(--bg);stroke:var(--fg);stroke-width:2}
 .center{text-align:center}
+#s-game.role-seeker #g-seeker{order:-1}
+#s-game.role-hider #g-edge{order:-1}
 
 .vis{font-size:22px;font-weight:700;text-align:center;padding:14px;border-radius:12px;border:2px solid currentColor}
 .vis.hidden-ok{color:var(--good)}
@@ -208,7 +213,7 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
           <input id="catchr" type="number" inputmode="numeric" min="5" max="50" step="1" value="10">
         </label>
         <label class="fld" for="stillsec">Po kolika sekundách stání chytač uvidí šipky (s)
-          <input id="stillsec" type="number" inputmode="numeric" min="2" max="30" step="1" value="5">
+          <input id="stillsec" type="number" inputmode="numeric" min="2" max="30" step="1" value="3">
         </label>
         <label class="chk" for="showdist"><input id="showdist" type="checkbox"> Chytač vidí u šipky i vzdálenost</label>
       </div>
@@ -249,8 +254,6 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
     </div>
 
     <div id="g-seeker" class="stack" hidden>
-      <div id="g-vis" class="vis"></div>
-      <div class="bar" aria-hidden="true"><div id="g-bar"></div></div>
       <svg id="dial" viewBox="-120 -120 240 240" role="img" aria-label="Šipky k viditelným chytaným">
         <circle class="ring" r="100"/>
         <g id="ticks"></g>
@@ -258,6 +261,8 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
         <g id="north" visibility="hidden"><circle class="nbub" cx="0" cy="-100" r="12"/><text class="ntxt" x="0" y="-95.5">S</text></g>
         <g id="arrows"></g>
       </svg>
+      <div id="g-vis" class="vis"></div>
+      <div class="bar" aria-hidden="true"><div id="g-bar"></div></div>
       <p id="g-sk-hint" class="note center"></p>
     </div>
 
@@ -3389,6 +3394,8 @@ function renderGame() {
   if (!m || !me) return;
   const sn = serverNow(), phase = phaseOf(m, sn), st = m.settings;
   const isH = me.role === 'hider', ok = me.status === 'ok';
+  const sg = $('s-game'), sgc = 'stack ' + (isH ? 'role-hider' : 'role-seeker');
+  if (sg.className !== sgc) sg.className = sgc;
   const rb = $('g-role');
   rb.textContent = isH ? 'Jsi chytaný' : 'Jsi chytač';
   setClassOnly(rb, 'rolebadge ' + (isH ? 'hider' : 'seeker'));
