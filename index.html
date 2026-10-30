@@ -67,6 +67,7 @@ input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
 .seg button{border:0;border-radius:0;min-height:44px}
 .seg button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
+.chips button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;display:grid;gap:8px}
 details{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 summary{cursor:pointer;font-weight:600}
@@ -91,6 +92,8 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 .rolebtns button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
 
 .status{text-align:center}
+.plain{display:grid;gap:8px}
+#routes{display:block;width:min(100%,340px);height:auto;margin:0 auto}
 .rolebadge{display:inline-block;justify-self:center;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:99px;border:2px solid currentColor}
 .rolebadge.seeker{color:var(--arrow)}
 .rolebadge.hider{color:var(--accent)}
@@ -242,7 +245,7 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 
   <!-- Hra -->
   <section id="s-game" class="stack" hidden>
-    <div class="card status">
+    <div class="status plain">
       <span id="g-role" class="rolebadge"></span>
       <div id="g-title" class="muted"></div>
       <div id="g-clock" class="clock mono">0:00</div>
@@ -275,6 +278,8 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
       <div class="edgebox">
         <svg id="mini" viewBox="-120 -120 240 240" role="img" aria-label="Vaše poloha v hrací ploše">
           <circle class="mini-ring" r="100"/>
+          <circle class="nbub" cx="0" cy="-100" r="14"/>
+          <text class="ntxt" x="0" y="-93.7" style="font-size:18px">S</text>
           <line class="mini-cross" x1="-8" y1="0" x2="8" y2="0"/>
           <line class="mini-cross" x1="0" y1="-8" x2="0" y2="8"/>
           <circle id="mini-dot" r="9" cx="0" cy="0" fill="var(--accent)" stroke="var(--bg)" stroke-width="3"/>
@@ -282,7 +287,6 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
         <div>
           <div class="muted" id="edge-lbl">Do okraje</div>
           <div id="edge-num" class="edgenum">—</div>
-          <div class="muted">Sever je nahoře.</div>
         </div>
       </div>
     </div>
@@ -297,10 +301,12 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
 
   <!-- Konec hry -->
   <section id="s-end" class="stack" hidden>
-    <div class="card status">
+    <div class="status plain">
       <strong id="en-title" style="font-size:22px"></strong>
       <span id="en-sub" class="muted"></span>
     </div>
+    <h2>Trasy</h2>
+    <svg id="routes" viewBox="-125 -125 250 250" role="img" aria-label="Hrací plocha s trasami všech hráčů"></svg>
     <h2>Výsledky</h2>
     <ul id="en-list" class="plist"></ul>
     <button id="btn-home" class="primary" type="button">Zpět na úvod</button>
@@ -2743,7 +2749,7 @@ const CFG = {
   HEARTBEAT_MS: 3000, GPS_FRESH_MS: 8000, FRESH_MS: 9000, DQ_MS: 20000,
   OUT_GRACE_MS: 15000, EDGE_WARN_M: 30, COUNTDOWN_MS: 5000,
   GPS_OK_ACC: 30, MAX_PLAYERS: 10, SPEED_MOVING: 1.0, CATCH_HOLD_MS: 2000,
-  SEEKER_WAIT_M: 20, SEEKER_WARN_M: 15, WAIT_GRACE_MS: 10000, HUNT_HEARTBEAT_MS: 1000,
+  TRACK_MS: 3000, SEEKER_WAIT_M: 20, SEEKER_WARN_M: 15, WAIT_GRACE_MS: 10000, HUNT_HEARTBEAT_MS: 1000,
   LIMITS: { still: 0.4, run: 3.0, rot: 30 }   // m/s² a °/s, ladit podle testu
 };
 const COLORS = ['#e6194b', '#f58231', '#d4a000', '#3cb44b', '#17a2a2', '#4363d8', '#911eb4', '#f032e6', '#8c564b', '#7a8691'];
@@ -2778,7 +2784,7 @@ let db = null, SV = null;
 const G = {
   uid: null, code: null, meta: null, players: {}, pos: {}, offset: 0, online: false,
   screen: null, unsub: [], lastStatus: null, joinedOnce: false, closeSince: {},
-  outsideSince: null, kickSince: null, waitOutSince: null, lastPublish: 0,
+  outsideSince: null, kickSince: null, waitOutSince: null, lastPublish: 0, tracks: {}, tracksWatch: false, lastTrack: 0,
   sig: {}, qrFor: null, anchorDist: null,
   cfg: { mode: 'time', roleMode: 'random' }, busy: false
 };
@@ -2940,6 +2946,7 @@ function resetGame() {
   G.code = null; G.meta = null; G.players = {}; G.pos = {};
   G.lastStatus = null; G.joinedOnce = false; G.closeSince = {};
   G.outsideSince = null; G.kickSince = null; G.waitOutSince = null; G.qrFor = null; G.sig = {};
+  G.tracks = {}; G.tracksWatch = false; G.lastTrack = 0;
   store.set('lastGame', null);
 }
 function enterGame(code) {
@@ -2965,6 +2972,13 @@ async function leaveGame(msg) {
     if (!s.exists()) await base.remove();
   } catch (e) {}
 }
+function watchTracks() {
+  if (G.tracksWatch || !G.code) return;
+  G.tracksWatch = true;
+  const ref = R('tracks'), fn = s => { if (!G.code) return; G.tracks = s.val() || {}; schedule(); };
+  ref.on('value', fn);
+  G.unsub.push(() => ref.off('value', fn));
+}
 function dropMyPos() { if (G.code) R('pos/' + G.uid).remove().catch(() => {}); }
 function setStatusIfOk(id, status, extra) {
   return R('players/' + id).transaction(cur =>
@@ -2987,7 +3001,7 @@ function onMeta() {
   }
   if (m.status === 'lobby') { if (G.screen !== 'lobby') show('lobby'); }
   else if (m.status === 'running') { if (G.screen !== 'game') { show('game'); vib([200]); } }
-  else if (m.status === 'ended') { if (G.screen !== 'end') { show('end'); dropMyPos(); vib([100, 80, 100]); } }
+  else if (m.status === 'ended') { if (G.screen !== 'end') { show('end'); dropMyPos(); vib([100, 80, 100]); } watchTracks(); }
   schedule();
 }
 function onPlayers() {
@@ -3124,6 +3138,10 @@ function publish(force) {
   G.lastPublish = now;
   const q = pubPos();
   R('pos/' + G.uid).set({ lat: q.lat, lon: q.lon, acc: Math.round(q.acc), ts: SV.TIMESTAMP }).catch(() => {});
+  if (G.meta.status === 'running' && now - G.lastTrack >= CFG.TRACK_MS) {
+    G.lastTrack = now;
+    R('tracks/' + G.uid + '/' + Math.floor(serverNow() / 1000)).set(q.lat.toFixed(6) + ',' + q.lon.toFixed(6)).catch(() => {});
+  }
 }
 function lobbyLogic(now) {
   const a = G.meta.anchor, p = S.pos;
@@ -3271,6 +3289,9 @@ function renderHome() {
   $('btn-new').disabled = false;
 }
 function renderCreate() {
+  for (const [id, attr] of [['radius', 'rad'], ['headstart', 'head'], ['duration', 'dur']]) {
+    document.querySelectorAll('[data-' + attr + ']').forEach(b => b.setAttribute('aria-pressed', String(b.dataset[attr] === $(id).value)));
+  }
   $('rad-out').textContent = fmtDist(parseFloat($('radius').value));
   $('head-out').textContent = $('headstart').value + ' min';
   $('dur-out').textContent = $('duration').value + ' min';
@@ -3470,14 +3491,11 @@ function renderGame() {
     $('g-sk-hint').textContent = hint;
   }
   if (ok && isH) {
-    const vis = $('g-vis-h'), hint = $('g-hint-h');
-    if (phase === 'countdown' || phase === 'headstart') {
-      vis.textContent = 'Utíkej a schovej se'; setClassOnly(vis, 'vis hidden-ok');
-      hint.textContent = 'Během náskoku vás chytači nevidí a musí zůstat u startu.';
-    } else {
-      vis.textContent = 'Honí tě chytači'; setClassOnly(vis, 'vis warn');
-      hint.textContent = 'Chytači uvidí tvůj směr, jen když sami stojí. Poloha se ale posílá pořád, takže tě chytí i na útěku.';
-    }
+    const vis = $('g-vis-h'), hint = $('g-hint-h'), head = phase === 'countdown' || phase === 'headstart';
+    vis.textContent = head ? 'Utíkej!' : 'Honí tě chytači';
+    setClassOnly(vis, head ? 'vis hidden-ok' : 'vis exposed');
+    hint.textContent = head ? 'Během náskoku vás chytači nevidí a musí zůstat u startu.' : '';
+    hint.hidden = !head;
   }
   if (ok) renderMini(me);
 
@@ -3497,9 +3515,52 @@ function renderGame() {
     }));
   }
 }
+function parseTrack(obj) {
+  return Object.keys(obj || {}).map(Number).sort((a, b) => a - b).map(k => {
+    const q = String(obj[k]).split(',').map(Number);
+    return { la: q[0], lo: q[1] };
+  }).filter(q => isFinite(q.la) && isFinite(q.lo));
+}
+function renderRoutes(m) {
+  const c = m.center;
+  if (!c) return;
+  const list = sortedPlayers();
+  const sig = JSON.stringify([list.map(p => [p.id, p.status, p.color]), Object.keys(G.tracks).map(k => [k, Object.keys(G.tracks[k] || {}).length])]);
+  if (G.sig.routes === sig) return;
+  G.sig.routes = sig;
+  const mk = 111195, cl = Math.cos(c.lat * RAD), Rm = m.settings.radius;
+  const tr = list.map(p => ({ p, pts: parseTrack(G.tracks[p.id]).map(q => ({ x: (q.lo - c.lon) * mk * cl, y: (q.la - c.lat) * mk })) }));
+  let far = Rm;
+  for (const t of tr) for (const q of t.pts) far = Math.max(far, Math.hypot(q.x, q.y) * 1.05);
+  const sc = 100 / far, Rs = Rm * sc;
+  const g = $('routes');
+  g.replaceChildren();
+  const el = (tag, attrs) => { const e = document.createElementNS(svgNS, tag); for (const a in attrs) e.setAttribute(a, attrs[a]); return e; };
+  g.append(el('circle', { r: Rs.toFixed(1), fill: 'none', stroke: 'var(--line)', 'stroke-width': 2 }));
+  g.append(el('line', { x1: -6, x2: 6, y1: 0, y2: 0, stroke: 'var(--line)', 'stroke-width': 2 }), el('line', { x1: 0, x2: 0, y1: -6, y2: 6, stroke: 'var(--line)', 'stroke-width': 2 }));
+  g.append(el('circle', { cx: 0, cy: (-Rs).toFixed(1), r: 14, class: 'nbub' }));
+  const north = el('text', { x: 0, y: (-Rs + 6.3).toFixed(1), class: 'ntxt', style: 'font-size:18px' });
+  north.textContent = 'S';
+  g.append(north);
+  for (const t of tr) {
+    if (!t.pts.length) continue;
+    const col = COLORS[t.p.color] || '#888';
+    const P = t.pts.map(q => [(q.x * sc).toFixed(1), (-q.y * sc).toFixed(1)]);
+    if (P.length > 1) g.append(el('polyline', { points: P.map(q => q.join(',')).join(' '), fill: 'none', stroke: col, 'stroke-width': 3, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+    g.append(el('circle', { cx: P[0][0], cy: P[0][1], r: 4.5, fill: 'var(--bg)', stroke: col, 'stroke-width': 2.5 }));
+    const last = P[P.length - 1], lx = +last[0], ly = +last[1];
+    if (t.p.status === 'caught') {
+      const x = el('g', { class: 'xmark' });
+      x.append(el('line', { x1: lx - 5, y1: ly - 5, x2: lx + 5, y2: ly + 5, stroke: col, 'stroke-width': 3.5, 'stroke-linecap': 'round' }),
+        el('line', { x1: lx - 5, y1: ly + 5, x2: lx + 5, y2: ly - 5, stroke: col, 'stroke-width': 3.5, 'stroke-linecap': 'round' }));
+      g.append(x);
+    } else g.append(el('circle', { cx: last[0], cy: last[1], r: 5, fill: col, stroke: 'var(--bg)', 'stroke-width': 2 }));
+  }
+}
 function renderEnd() {
   const m = G.meta;
   if (!m || !m.result) return;
+  renderRoutes(m);
   const r = m.result, list = sortedPlayers();
   const sig = JSON.stringify([r, list.map(p => [p.id, p.status, p.at, p.by, p.reason])]);
   if (G.sig.end === sig) return;
