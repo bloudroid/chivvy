@@ -52,6 +52,7 @@ h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:u
 .banner.bad{color:var(--bad)}
 .banner.warn{color:var(--warn)}
 .banner.good{color:var(--good)}
+.banner.alert{background:var(--bad);border-color:var(--bad);color:var(--bg);font-weight:700;font-size:15px}
 
 button{font:inherit;font-weight:600;min-height:48px;padding:0 16px;border-radius:10px;border:1.5px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer}
 button.primary{width:100%;background:var(--accent);color:var(--on-accent)}
@@ -137,6 +138,7 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
       <span class="pill" id="p-gps">GPS čeká</span>
       <span class="pill" id="p-cmp">Kompas čeká</span>
       <span class="pill" id="p-mot">Pohyb čeká</span>
+      <span class="pill bad" id="p-net" hidden>Offline</span>
     </div>
   </header>
 
@@ -2750,7 +2752,7 @@ function fmtClock(ms) {
 
 const CFG = {
   JOIN_RADIUS: 30, WARN_FROM: 20, KICK_MS: 8000,
-  HEARTBEAT_MS: 3000, GPS_FRESH_MS: 8000, FRESH_MS: 9000, DQ_MS: 20000,
+  HEARTBEAT_MS: 3000, GPS_WARN_MS: 5000, NET_STALE_MS: 8000, GPS_WEAK_M: 35, GPS_FRESH_MS: 8000, FRESH_MS: 9000, DQ_MS: 20000,
   OUT_GRACE_MS: 15000, EDGE_WARN_M: 30, COUNTDOWN_MS: 5000,
   GPS_OK_ACC: 30, MAX_PLAYERS: 10, SPEED_MOVING: 1.0, CATCH_HOLD_MS: 2000,
   TRACK_MS: 3000, SEEKER_WAIT_M: 20, SEEKER_WARN_M: 15, WAIT_GRACE_MS: 10000, HUNT_HEARTBEAT_MS: 1000,
@@ -2788,7 +2790,7 @@ let db = null, SV = null;
 const G = {
   uid: null, code: null, meta: null, players: {}, pos: {}, offset: 0, online: false,
   screen: null, unsub: [], lastStatus: null, joinedOnce: false, closeSince: {},
-  outsideSince: null, kickSince: null, waitOutSince: null, lastPublish: 0, tracks: {}, tracksWatch: false, lastTrack: 0,
+  outsideSince: null, kickSince: null, waitOutSince: null, lastPublish: 0, tracks: {}, tracksWatch: false, lastTrack: 0, lastAck: 0, runStart: 0, alertAt: 0, hadAlert: false, netDown: false,
   sig: {}, qrFor: null, anchorDist: null,
   cfg: { mode: 'time', roleMode: 'random' }, busy: false
 };
@@ -2944,6 +2946,10 @@ const Snd = {
       if (kind === 'alarm') {
         // ostrá siréna, 2 s: střídavě stoupá a klesá mezi 650 a 1100 Hz
         for (let i = 0; i < 8; i++) this.note(i % 2 ? 1100 : 650, t + i * 0.25, 0.25, 'sawtooth', 0.55, i % 2 ? 650 : 1100);
+      } else if (kind === 'warn') {
+        for (let i = 0; i < 3; i++) this.note(880, t + i * 0.22, 0.14, 'square', 0.3);
+      } else if (kind === 'ok') {
+        this.note(660, t, 0.12, 'sine', 0.3); this.note(880, t + 0.13, 0.2, 'sine', 0.3);
       } else if (kind === 'win') {
         // "ta-dáá": krátký tón a dlouhý durový akord
         this.note(523.25, t, 0.13, 'triangle', 0.4);
@@ -2987,7 +2993,7 @@ function resetGame() {
   G.code = null; G.meta = null; G.players = {}; G.pos = {};
   G.lastStatus = null; G.joinedOnce = false; G.closeSince = {};
   G.outsideSince = null; G.kickSince = null; G.waitOutSince = null; G.qrFor = null; G.sig = {};
-  G.tracks = {}; G.tracksWatch = false; G.lastTrack = 0;
+  G.tracks = {}; G.tracksWatch = false; G.lastTrack = 0; G.lastAck = 0; G.runStart = 0; G.alertAt = 0; G.hadAlert = false; G.netDown = false;
   store.set('lastGame', null);
 }
 function enterGame(code) {
@@ -3178,7 +3184,7 @@ function publish(force) {
   if (!force && now - G.lastPublish < (hunted ? CFG.HUNT_HEARTBEAT_MS : CFG.HEARTBEAT_MS)) return;
   G.lastPublish = now;
   const q = pubPos();
-  R('pos/' + G.uid).set({ lat: q.lat, lon: q.lon, acc: Math.round(q.acc), ts: SV.TIMESTAMP }).catch(() => {});
+  R('pos/' + G.uid).set({ lat: q.lat, lon: q.lon, acc: Math.round(q.acc), ts: SV.TIMESTAMP }).then(() => { G.lastAck = Date.now(); }).catch(() => {});
   if (G.meta.status === 'running' && now - G.lastTrack >= CFG.TRACK_MS) {
     G.lastTrack = now;
     R('tracks/' + G.uid + '/' + Math.floor(serverNow() / 1000)).set(q.lat.toFixed(6) + ',' + q.lon.toFixed(6)).catch(() => {});
@@ -3254,18 +3260,49 @@ function catchLogic(now, sn) {
     } else delete G.closeSince[hd.id];
   }
 }
+// Kontrola připojení z pohledu hráče: GPS i internet. Ostatní hráče by o výpadku poznali až po vypršení limitu.
+function connectionLogic(now) {
+  if (!G.runStart) G.runStart = now;
+  const gpsT = S.pos ? S.pos.t : G.runStart, gpsAge = now - gpsT;
+  const gpsLost = gpsAge > CFG.GPS_WARN_MS;
+  const netDown = !G.online || navigator.onLine === false || (!gpsLost && G.lastAck > 0 && now - G.lastAck > CFG.NET_STALE_MS);
+  G.netDown = netDown;
+  const age = Math.max(gpsLost ? gpsAge : 0, netDown ? now - (G.lastAck || G.runStart) : 0);
+  const left = Math.max(0, Math.ceil((CFG.DQ_MS - age) / 1000));
+  const tail = ' Do diskvalifikace zbývá ' + left + ' s.';
+  let text = null;
+  if (gpsLost && netDown) text = 'Nemáte GPS ani internet, ostatní vás nevidí. Vyjděte na otevřené místo a zkontrolujte mobilní data.' + tail;
+  else if (gpsLost) text = 'Ztratili jste signál GPS, ostatní vás nevidí. Vyjděte na otevřené místo.' + tail;
+  else if (netDown) text = 'Telefon je offline, ostatní vás nevidí. Zkontrolujte mobilní data nebo wifi.' + tail;
+  $('p-net').hidden = !netDown;
+  if (text) {
+    note('gpsloss', text, 'bad alert');
+    note('connok', null);
+    G.hadAlert = true;
+    if (now - G.alertAt > 4000) { G.alertAt = now; vib([250, 100, 250]); Snd.play('warn'); }
+  } else {
+    note('gpsloss', null);
+    if (G.hadAlert) {
+      G.hadAlert = false; G.alertAt = 0;
+      note('connok', 'Připojení je zpět.', 'good');
+      setTimeout(() => note('connok', null), 3500);
+      Snd.play('ok');
+    }
+  }
+  const p = S.pos;
+  if (!text && p && p.acc > CFG.GPS_WEAK_M) note('gpsweak', 'Slabý signál GPS (±' + Math.round(p.acc) + ' m). Chytání nemusí fungovat přesně.', 'warn');
+  else note('gpsweak', null);
+}
 function runningLogic(me, now, sn) {
   const m = G.meta, phase = phaseOf(m, sn);
   if (me.status === 'ok') {
-    const gpsAge = S.pos ? now - S.pos.t : Infinity;
-    if (gpsAge > CFG.GPS_FRESH_MS) note('gpsloss', 'GPS neposílá polohu. Do diskvalifikace zbývá ' + Math.max(0, Math.ceil((CFG.DQ_MS - gpsAge) / 1000)) + ' s.', 'bad');
-    else note('gpsloss', null);
+    connectionLogic(now);
     if (me.role === 'hider' && phase !== 'countdown') perimeterLogic(now);
     if (me.role === 'seeker') {
       if (phase === 'hunt') { note('wait', null); G.waitOutSince = null; catchLogic(now, sn); }
       else seekerWaitLogic(now);
     }
-  } else { note('gpsloss', null); note('edge', null); note('wait', null); }
+  } else { for (const k of ['gpsloss', 'gpsweak', 'connok', 'edge', 'wait']) note(k, null); G.hadAlert = false; $('p-net').hidden = true; }
   const ownFresh = G.online && G.pos[G.uid] && sn - (G.pos[G.uid].ts || 0) < CFG.FRESH_MS;
   if (ownFresh) for (const id of dqList(G.players, G.pos, sn, m.startAt, CFG.DQ_MS)) if (id !== G.uid) setStatusIfOk(id, 'dq', { reason: 'gps' });
   const r = checkEnd(m, G.players, sn);
@@ -3304,7 +3341,7 @@ function tick() {
 function renderPills() {
   const gp = $('p-gps'), p = S.pos, now = Date.now();
   if (!p) { gp.textContent = 'GPS čeká'; gp.className = 'pill'; }
-  else if (now - p.t > CFG.GPS_FRESH_MS) { gp.textContent = 'GPS bez signálu'; gp.className = 'pill bad'; }
+  else if (now - p.t > CFG.GPS_WARN_MS) { gp.textContent = 'GPS bez signálu'; gp.className = 'pill bad'; }
   else { gp.textContent = 'GPS ±' + Math.round(p.acc) + ' m'; gp.className = 'pill ' + (p.acc <= 10 ? 'good' : p.acc <= 20 ? 'warn' : 'bad'); }
   const cp = $('p-cmp');
   if (S.head == null) { cp.textContent = 'Kompas čeká'; cp.className = 'pill'; }
