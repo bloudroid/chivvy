@@ -243,11 +243,10 @@ output{font-family:var(--mono);color:var(--fg);font-size:16px}
       <canvas id="qr" role="img" aria-label="QR kód s pozvánkou do hry"></canvas>
       <p class="note center">Ostatní naskenují QR kód fotoaparátem telefonu, nebo zadají kód.</p>
     </div>
-    <p id="lb-lock" class="banner warn">Během hry nezamykejte obrazovku.</p>
     <h2>Hráči (<span id="lb-n">0</span>)</h2>
     <ul id="lb-list" class="plist"></ul>
     <p id="lb-sum" class="note"></p>
-    <p id="lb-dist" class="note"></p>
+    <p id="lb-lock" class="banner warn">Během hry nezamykejte obrazovku.</p>
     <button id="btn-start" class="primary" type="button" hidden>Spustit hru</button>
     <p id="lb-hint" class="note"></p>
     <button id="btn-leave" type="button">Opustit hru</button>
@@ -3443,7 +3442,6 @@ function renderLobby() {
     }));
   }
   $('lb-sum').textContent = summaryText(m.settings) + '.';
-  $('lb-dist').textContent = G.anchorDist != null ? 'Jste ' + Math.round(G.anchorDist) + ' m od místa startu.' : '';
   const sb = $('btn-start');
   sb.hidden = !isHost;
   let hint = '';
@@ -3519,7 +3517,7 @@ function renderGame() {
   if (sg.className !== sgc) sg.className = sgc;
   let title, clock;
   if (phase === 'countdown') { title = 'Start za'; clock = fmtClock(m.startAt - sn); }
-  else if (phase === 'headstart') { title = isH ? 'Utíkej! Lovci vyrazí za' : 'Štvanci utíkají. Lov začne za'; clock = fmtClock(m.huntAt - sn); }
+  else if (phase === 'headstart') { title = isH ? 'Lovci vyrazí za' : 'Štvanci utíkají. Lov začne za'; clock = fmtClock(m.huntAt - sn); }
   else if (m.endsAt) { title = 'Do konce hry'; clock = fmtClock(m.endsAt - sn); }
   else { title = 'Lov běží, uplynulo'; clock = fmtClock(sn - m.huntAt); }
   $('g-title').textContent = title;
@@ -3582,20 +3580,20 @@ function renderGame() {
     } else {
       vis.textContent = 'Zastav se.'; setClassOnly(vis, 'vis warn'); bar.style.width = '0';
     }
-    let hint;
-    if (phase !== 'hunt') hint = 'Lov začne po skončení náskoku. Zůstaňte do ' + CFG.SEEKER_WAIT_M + ' m od startu.';
+    let hint = '';
+    if (phase !== 'hunt') hint = '';
     else if (th == null) hint = 'Čekám na kompas.';
     else if (!seekerStill) hint = 'Šipky se ukážou, až budete stát ' + st.stillSec + ' s. Za pohybu štvance nevidíte.';
     else if (!visCount) hint = 'Nikdo není vidět. Čekám na polohu štvanců.';
-    else hint = 'Vidíte ' + visCount + ' z ' + hiderCount + '. Chycení je do ' + st.catchR + ' m.';
     $('g-sk-hint').textContent = hint;
+    $('g-sk-hint').hidden = !hint;
   }
   if (ok && isH) {
     const vis = $('g-vis-h'), hint = $('g-hint-h'), head = phase === 'countdown' || phase === 'headstart';
     vis.textContent = head ? 'Utíkej!' : 'Honí tě lovci';
     setClassOnly(vis, head ? 'vis hidden-ok' : 'vis exposed');
-    hint.textContent = head ? 'Během náskoku vás lovci nevidí a musí zůstat u startu.' : '';
-    hint.hidden = !head;
+    hint.textContent = '';
+    hint.hidden = true;
   }
   if (ok) renderMini(me);
 
